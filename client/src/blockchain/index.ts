@@ -1,2 +1,1 @@
-export * from './PixelBoardClient';
-export * from './AptosUtils'; 
+export * from './pixelBoardFunctions'; 
