@@ -4,6 +4,8 @@ module pixel_board_admin::PixelBoard {
     use aptos_framework::coin;
     use aptos_framework::aptos_coin::AptosCoin;
     use aptos_std::table;
+    use aptos_framework::event;
+    use aptos_framework::account;
 
     /* -----------------------------------------------------------
        Global parameters
@@ -33,12 +35,30 @@ module pixel_board_admin::PixelBoard {
     /// Board lives as one resource that owns the Table
     struct Board has key {
         pixels: table::Table<u64, Pixel>,
+        buy_events: event::EventHandle<PixelBoughtEvent>,
+        update_events: event::EventHandle<PixelUpdatedEvent>,
     }
 
     /// A pair of pixel ID and pixel data for returning board state
     struct PixelWithId has copy, drop, store {
         id: u64,
         pixel: Pixel,
+    }
+
+    /// Event emitted when a pixel is bought
+    struct PixelBoughtEvent has drop, store {
+        id: u64,
+        owner: address,
+        argb: u32,
+        link: vector<u8>,
+    }
+
+    /// Event emitted when a pixel is updated
+    struct PixelUpdatedEvent has drop, store {
+        id: u64,
+        owner: address,
+        argb: u32,
+        link: vector<u8>,
     }
 
     /* -----------------------------------------------------------
@@ -52,7 +72,11 @@ module pixel_board_admin::PixelBoard {
             0
         );
         let empty_table = table::new<u64, Pixel>();
-        move_to(board_signer, Board { pixels: empty_table });
+        move_to(board_signer, Board { 
+            pixels: empty_table,
+            buy_events: account::new_event_handle<PixelBoughtEvent>(board_signer),
+            update_events: account::new_event_handle<PixelUpdatedEvent>(board_signer),
+        });
     }
 
     /* -----------------------------------------------------------
@@ -80,6 +104,7 @@ module pixel_board_admin::PixelBoard {
         collect_payment(payer, n);
 
         let board = borrow_global_mut<Board>(@pixel_board_admin);
+        let payer_addr = signer::address_of(payer);
 
         let i = 0;
         while (i < n) {
@@ -90,15 +115,30 @@ module pixel_board_admin::PixelBoard {
             let link_ref = vector::borrow(&links, i);
             assert!(vector::length(link_ref) <= MAX_LINK_LEN, 103);
 
+            let argb = *vector::borrow(&argbs, i);
+            let link = *vector::borrow(&links, i);
+
             table::add<u64, Pixel>(
                 &mut board.pixels,
                 id,
                 Pixel {
-                    owner: signer::address_of(payer),
-                    argb:  *vector::borrow(&argbs, i),
-                    link:  *vector::borrow(&links, i),
+                    owner: payer_addr,
+                    argb:  argb,
+                    link:  link,
                 },
             );
+            
+            // Emit event for this pixel purchase
+            event::emit_event<PixelBoughtEvent>(
+                &mut board.buy_events,
+                PixelBoughtEvent {
+                    id,
+                    owner: payer_addr,
+                    argb,
+                    link,
+                }
+            );
+            
             i = i + 1;
         }
     }
@@ -114,6 +154,7 @@ module pixel_board_admin::PixelBoard {
         assert!(n == vector::length(&argbs) && n == vector::length(&links), 200);
 
         let board = borrow_global_mut<Board>(@pixel_board_admin);
+        let owner_addr = signer::address_of(owner);
 
         let i = 0;
         while (i < n) {
@@ -122,20 +163,38 @@ module pixel_board_admin::PixelBoard {
             assert!(table::contains<u64, Pixel>(&board.pixels, id), 202);
 
             let pix = table::borrow_mut<u64, Pixel>(&mut board.pixels, id);
-            assert!(pix.owner == signer::address_of(owner), 203);
+            assert!(pix.owner == owner_addr, 203);
 
             let link_ref = vector::borrow(&links, i);
             assert!(vector::length(link_ref) <= MAX_LINK_LEN, 204);
 
-            pix.argb = *vector::borrow(&argbs, i);
-            pix.link = *vector::borrow(&links, i);
+            let argb = *vector::borrow(&argbs, i);
+            let link = *vector::borrow(&links, i);
+
+            pix.argb = argb;
+            pix.link = link;
+            
+            // Emit event for this pixel update
+            event::emit_event<PixelUpdatedEvent>(
+                &mut board.update_events,
+                PixelUpdatedEvent {
+                    id,
+                    owner: owner_addr,
+                    argb,
+                    link,
+                }
+            );
+            
             i = i + 1;
         }
     }
 
+    /* -----------------------------------------------------------
+       VIEW FUNCTIONS
+    ----------------------------------------------------------- */
+
     /// View the entire board - returns only purchased pixels along with their coordinates
-    /// Returns a vector of PixelWithId for all purchased pixels
-    /// Empty pixels don't need to be returned as they're known to be white
+    #[view]
     public fun view_board(): vector<PixelWithId> acquires Board {
         let result = vector::empty<PixelWithId>();
         let board = borrow_global<Board>(@pixel_board_admin);
@@ -158,11 +217,8 @@ module pixel_board_admin::PixelBoard {
         result
     }
 
-    /* -----------------------------------------------------------
-       VIEW HELPERS
-    ----------------------------------------------------------- */
-
     /// Read a pixel; returns default white if never purchased
+    #[view]
     public fun view_pixel(idx: u64): Pixel acquires Board {
         assert!(idx < WIDTH * HEIGHT, 300);
         let board = borrow_global<Board>(@pixel_board_admin);
@@ -174,27 +230,33 @@ module pixel_board_admin::PixelBoard {
     }
 
     /// Get the owner address of a pixel
-    public fun get_pixel_owner(pixel: &Pixel): address {
+    #[view]
+    public fun get_pixel_owner_by_id(idx: u64): address acquires Board {
+        let pixel = view_pixel(idx);
         pixel.owner
     }
 
     /// Get the ARGB color of a pixel
-    public fun get_pixel_color(pixel: &Pixel): u32 {
+    #[view]
+    public fun get_pixel_color_by_id(idx: u64): u32 acquires Board {
+        let pixel = view_pixel(idx);
         pixel.argb
     }
 
     /// Get the link of a pixel
-    public fun get_pixel_link(pixel: &Pixel): vector<u8> {
+    #[view]
+    public fun get_pixel_link_by_id(idx: u64): vector<u8> acquires Board {
+        let pixel = view_pixel(idx);
         pixel.link
     }
 
-    /// Get the ID from a PixelWithId
-    public fun get_pixel_id(pixel_with_id: &PixelWithId): u64 {
+    /// Extract properties from a PixelWithId (for internal use)
+    fun internal_get_pixel_id(pixel_with_id: PixelWithId): u64 {
         pixel_with_id.id
     }
 
-    /// Get the Pixel from a PixelWithId
-    public fun get_pixel(pixel_with_id: &PixelWithId): Pixel {
+    /// Extract Pixel from a PixelWithId (for internal use)
+    fun internal_get_pixel(pixel_with_id: PixelWithId): Pixel {
         pixel_with_id.pixel
     }
 }
