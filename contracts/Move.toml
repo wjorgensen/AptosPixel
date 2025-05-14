@@ -1,0 +1,15 @@
+[package]
+name = "PixelBoard"
+version = "0.1.0"
+authors = ["Your Name"]
+
+[addresses]
+pixel_board_admin = "_" # Will be replaced with actual address when deploying
+
+[dev-addresses]
+pixel_board_admin = "0xb7455810e64fc428d3ee5d4b01ba259cf598c538ff7fa8480424c4ce61951c93"
+
+[dependencies]
+AptosFramework = { git = "https://github.com/aptos-labs/aptos-core.git", rev = "devnet", subdir = "aptos-move/framework/aptos-framework" }
+
+[dev-dependencies]

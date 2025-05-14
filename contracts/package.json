@@ -1,0 +1,29 @@
+{
+  "name": "contracts",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "deploy": "ts-node scripts/deploy.ts",
+    "ts-test": "ts-node scripts/test.ts",
+    "move-test": "aptos move test",
+    "test": "npm run move-test",
+    "test-transaction": "ts-node scripts/test-transaction.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "aptos": "^1.21.0",
+    "@aptos-labs/ts-sdk": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.17",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  }
+}
+
