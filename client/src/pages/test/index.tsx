@@ -18,7 +18,7 @@ import {
   CONTRACT_ADDRESS,
   MODULE_NAME,
   getClient
-} from '@/blockchain/pixelBoardFunctions';
+} from '@/blockchain/PixelBoardClient';
 
 export default function TestPage() {
   const { account, connected, signAndSubmitTransaction } = useWallet();
