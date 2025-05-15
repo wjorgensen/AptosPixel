@@ -1,6 +1,6 @@
-# Pixel Grid Redis Cache
+# Pixel Grid Cache
 
-A dockerized Redis cache system for a 1000x1000 grid of pixels with the following properties for each cell:
+A dockerized PostgreSQL database system for a 1000x1000 grid of pixels with the following properties for each cell:
 - X,Y coordinates
 - Color (hex code)
 - URL (limited to 64 bytes)
@@ -9,7 +9,8 @@ A dockerized Redis cache system for a 1000x1000 grid of pixels with the followin
 ## Tech Stack
 - TypeScript
 - Express.js
-- Redis
+- PostgreSQL
+- Sequelize ORM
 - Docker
 - Aptos SDK
 
@@ -24,7 +25,11 @@ A dockerized Redis cache system for a 1000x1000 grid of pixels with the followin
 2. Configure your `.env` file:
 ```
 PORT=3005
-REDIS_URL=redis://redis:6379
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+POSTGRES_DB=pixels
 APTOS_CONTRACT_ADDRESS=<your-contract-address>
 APTOS_NETWORK=mainnet
 APTOS_NODE_URL=https://fullnode.mainnet.aptoslabs.com/v1
@@ -37,23 +42,23 @@ docker-compose up -d
 
 This will start:
 - The API service on port 3005
-- Redis cache on port 6379
+- PostgreSQL database on port 5432
 
 ## How It Works
 
-This service caches pixel data from the Aptos blockchain PixelBoard contract. It:
-1. Maintains a local Redis cache of the entire pixel board
+This service stores pixel data from the Aptos blockchain PixelBoard contract. It:
+1. Maintains a local PostgreSQL database of the entire pixel board
 2. Listens for blockchain events (PixelBoughtEvent and PixelUpdatedEvent)
-3. Automatically updates the cache when pixels are bought or updated
+3. Automatically updates the database when pixels are bought or updated
 4. Provides fast API access to the current state of the pixel board
 
 ### Event Listening
 
-The cache listens to two types of events from the Aptos smart contract:
+The system listens to two types of events from the Aptos smart contract:
 - `PixelBoughtEvent`: Triggered when a new pixel is purchased
 - `PixelUpdatedEvent`: Triggered when an existing pixel is updated
 
-When these events occur, the cache is automatically updated without requiring any API calls.
+When these events occur, the database is automatically updated without requiring any API calls.
 
 ## API Endpoints
 
@@ -61,13 +66,13 @@ When these events occur, the cache is automatically updated without requiring an
 ```
 GET /health
 ```
-Returns the health status of the API and Redis connection.
+Returns the health status of the API and database connection.
 
 ### Get the entire grid
 ```
 GET /api/grid
 ```
-Returns the entire 1000x1000 grid with all pixel data.
+Returns a list of non-default pixels in the grid (pixels that have been purchased or modified).
 
 ### Get a single pixel
 ```
@@ -83,13 +88,14 @@ Returns all pixels owned by the specified Aptos address.
 
 ## Data Structure
 
-Each pixel is stored in Redis with the following structure:
+Each pixel is stored in PostgreSQL with the following structure:
 
-- Key: `pixel:x:y` (e.g., `pixel:42:128`)
-- Values:
-  - `color`: Hex color code (e.g., `#FF5733`)
-  - `url`: URL string (max 64 bytes)
-  - `owner`: Aptos address of the pixel owner
+- `id`: Auto-incrementing primary key
+- `x`: X coordinate (0-999)
+- `y`: Y coordinate (0-999)
+- `color`: Hex color code (e.g., `#FF5733`)
+- `url`: URL string
+- `owner`: Aptos address of the pixel owner
 
 ## Development
 
@@ -98,6 +104,9 @@ Each pixel is stored in Redis with the following structure:
 ```bash
 # Install dependencies
 npm install
+
+# Run database migrations
+npm run migrate
 
 # Run in development mode with auto-reload
 npm run dev
@@ -135,8 +144,8 @@ module pixel_board_admin::PixelBoard {
 }
 ```
 
-The cache listens for the following events:
+The system listens for the following events:
 - `PixelBoughtEvent`: When a pixel is purchased
 - `PixelUpdatedEvent`: When a pixel is updated
 
-All updates to the cache come directly from the blockchain, ensuring data consistency. 
+All updates to the database come directly from the blockchain, ensuring data consistency. 

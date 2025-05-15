@@ -4,11 +4,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
-const redis_1 = require("redis");
 const body_parser_1 = __importDefault(require("body-parser"));
 const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
+const models_1 = require("./models");
 const aptos_1 = require("aptos");
+const sequelize_1 = require("sequelize");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const port = process.env.PORT || 3000;
@@ -21,45 +22,6 @@ const CONTRACT_ADDRESS = process.env.APTOS_CONTRACT_ADDRESS || '0x1';
 const MODULE_NAME = 'PixelBoard';
 const WIDTH = 1000;
 const HEIGHT = 1000;
-// Redis client setup
-const redisClient = (0, redis_1.createClient)({
-    url: process.env.REDIS_URL || 'redis://redis:6379'
-});
-// Redis error handling
-redisClient.on('error', (err) => {
-    console.error('Redis Client Error', err);
-});
-// Connect to Redis
-async function connectRedis() {
-    await redisClient.connect();
-    console.log('Connected to Redis');
-}
-// Initialize the grid with default values if it doesn't exist
-async function initializeGrid() {
-    const exists = await redisClient.exists('pixelGrid');
-    if (!exists) {
-        console.log('Initializing pixel grid...');
-        // Create a pipeline for faster bulk operations
-        const pipeline = redisClient.multi();
-        // Default pixel values
-        const defaultPixel = {
-            color: '#FFFFFF',
-            url: '',
-            owner: ''
-        };
-        // Set each pixel in the grid to the default value
-        for (let x = 0; x < WIDTH; x++) {
-            for (let y = 0; y < HEIGHT; y++) {
-                const key = `pixel:${x}:${y}`;
-                pipeline.hSet(key, 'color', defaultPixel.color);
-                pipeline.hSet(key, 'url', defaultPixel.url);
-                pipeline.hSet(key, 'owner', defaultPixel.owner);
-            }
-        }
-        await pipeline.exec();
-        console.log('Pixel grid initialized with default values');
-    }
-}
 // Utility function to convert from 1D contract coordinate to 2D grid coordinates
 function convertToXY(id) {
     return {
@@ -92,6 +54,46 @@ function decodeLink(bytes) {
         return '';
     }
 }
+// Initialize the database and create tables
+async function initializeDatabase() {
+    try {
+        // Test database connection
+        await models_1.sequelize.authenticate();
+        console.log('Connected to PostgreSQL database');
+        // Sync all models (create tables if they don't exist)
+        await models_1.sequelize.sync();
+        console.log('Database synchronized');
+        // Check if we need to initialize the grid with default values
+        const pixelCount = await models_1.Pixel.count();
+        if (pixelCount === 0) {
+            console.log('Initializing pixel grid with default values...');
+            // Create default pixels in batches to avoid memory issues
+            const batchSize = 1000;
+            for (let x = 0; x < WIDTH; x++) {
+                const pixelsToCreate = [];
+                for (let y = 0; y < HEIGHT; y++) {
+                    pixelsToCreate.push({
+                        x,
+                        y,
+                        color: '#FFFFFF',
+                        url: '',
+                        owner: ''
+                    });
+                    // Insert in batches
+                    if (pixelsToCreate.length >= batchSize || y === HEIGHT - 1) {
+                        await models_1.Pixel.bulkCreate(pixelsToCreate);
+                        pixelsToCreate.length = 0;
+                    }
+                }
+            }
+            console.log('Pixel grid initialized with default values');
+        }
+    }
+    catch (error) {
+        console.error('Database initialization error:', error);
+        throw error;
+    }
+}
 // Function to handle pixel bought events
 async function handlePixelBought(event) {
     try {
@@ -100,12 +102,23 @@ async function handlePixelBought(event) {
         const { x, y } = coords;
         const hexColor = argbToHex(argb);
         const url = decodeLink(link);
-        const key = `pixel:${x}:${y}`;
-        await redisClient.hSet(key, {
-            color: hexColor,
-            url: url,
-            owner: owner
+        // Find the pixel or create it if it doesn't exist
+        const [pixel, created] = await models_1.Pixel.findOrCreate({
+            where: { x, y },
+            defaults: {
+                color: hexColor,
+                url: url,
+                owner: owner
+            }
         });
+        // If pixel already exists, update it
+        if (!created) {
+            await pixel.update({
+                color: hexColor,
+                url: url,
+                owner: owner
+            });
+        }
         console.log(`Pixel bought at (${x}, ${y}) by ${owner}`);
     }
     catch (error) {
@@ -120,13 +133,20 @@ async function handlePixelUpdated(event) {
         const { x, y } = coords;
         const hexColor = argbToHex(argb);
         const url = decodeLink(link);
-        const key = `pixel:${x}:${y}`;
-        await redisClient.hSet(key, {
+        // Update the pixel
+        const [updatedRowsCount] = await models_1.Pixel.update({
             color: hexColor,
             url: url,
             owner: owner
+        }, {
+            where: { x, y }
         });
-        console.log(`Pixel updated at (${x}, ${y}) by ${owner}`);
+        if (updatedRowsCount > 0) {
+            console.log(`Pixel updated at (${x}, ${y}) by ${owner}`);
+        }
+        else {
+            console.log(`Pixel not found for update at (${x}, ${y})`);
+        }
     }
     catch (error) {
         console.error('Error handling pixel updated event:', error);
@@ -163,8 +183,12 @@ async function startEventListener(startVersion = BigInt(0)) {
                 if (buyEvents.length > 0 || updateEvents.length > 0) {
                     console.log(`Processed ${buyEvents.length} buy events and ${updateEvents.length} update events`);
                 }
-                // Store the current version in Redis for restart recovery
-                await redisClient.set('lastProcessedVersion', currentVersion.toString());
+                // Store the current version in database
+                await models_1.sequelize.query('CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY, value TEXT)');
+                await models_1.sequelize.query('INSERT INTO app_state (key, value) VALUES (\'lastProcessedVersion\', :value) ON CONFLICT (key) DO UPDATE SET value = :value', {
+                    replacements: { value: currentVersion.toString() },
+                    type: 'RAW'
+                });
             }
             catch (error) {
                 console.error('Error polling events:', error);
@@ -209,12 +233,12 @@ async function backfillHistoricalData() {
 // Health check endpoint
 app.get('/health', async (req, res) => {
     try {
-        // Check Redis connection
-        const pong = await redisClient.ping();
+        // Check database connection
+        await models_1.sequelize.authenticate();
         res.json({
             status: 'ok',
             timestamp: new Date().toISOString(),
-            redis: pong === 'PONG' ? 'connected' : 'error',
+            database: 'connected',
             version: process.env.npm_package_version || '1.0.0'
         });
     }
@@ -223,37 +247,28 @@ app.get('/health', async (req, res) => {
         res.status(500).json({
             status: 'error',
             timestamp: new Date().toISOString(),
-            redis: 'error'
+            database: 'error'
         });
     }
 });
 // Get the entire grid
 app.get('/api/grid', async (req, res) => {
     try {
-        const grid = [];
-        // Get all pixels and their data
-        for (let x = 0; x < WIDTH; x++) {
-            const row = [];
-            for (let y = 0; y < HEIGHT; y++) {
-                const key = `pixel:${x}:${y}`;
-                const rawPixel = await redisClient.hGetAll(key);
-                // Convert raw Redis data to RedisPixel with defaults
-                const pixel = {
-                    color: rawPixel.color || '#FFFFFF',
-                    url: rawPixel.url || '',
-                    owner: rawPixel.owner || ''
-                };
-                row.push({
-                    x,
-                    y,
-                    color: pixel.color,
-                    url: pixel.url,
-                    owner: pixel.owner
-                });
-            }
-            grid.push(row);
-        }
-        res.json({ grid });
+        // Rather than getting the entire grid at once, we can paginate
+        // or limit the response size for better performance
+        const pixels = await models_1.Pixel.findAll({
+            attributes: ['x', 'y', 'color', 'url', 'owner'],
+            where: {
+                // Only return non-default pixels to reduce response size
+                [sequelize_1.Op.or]: [
+                    { color: { [sequelize_1.Op.ne]: '#FFFFFF' } },
+                    { url: { [sequelize_1.Op.ne]: '' } },
+                    { owner: { [sequelize_1.Op.ne]: '' } }
+                ]
+            },
+            limit: 10000 // Adjust the limit as needed
+        });
+        res.json({ pixels });
     }
     catch (error) {
         console.error('Error getting grid:', error);
@@ -270,21 +285,21 @@ app.get('/api/pixel/:x/:y', async (req, res) => {
         if (xNum < 0 || xNum >= WIDTH || yNum < 0 || yNum >= HEIGHT || isNaN(xNum) || isNaN(yNum)) {
             return res.status(400).json({ error: 'Invalid coordinates' });
         }
-        const key = `pixel:${xNum}:${yNum}`;
-        const rawPixel = await redisClient.hGetAll(key);
-        // Convert raw Redis data to RedisPixel with defaults
-        const pixel = {
-            color: rawPixel.color || '#FFFFFF',
-            url: rawPixel.url || '',
-            owner: rawPixel.owner || ''
-        };
-        res.json({
-            x: xNum,
-            y: yNum,
-            color: pixel.color,
-            url: pixel.url,
-            owner: pixel.owner
+        const pixel = await models_1.Pixel.findOne({
+            where: { x: xNum, y: yNum },
+            attributes: ['x', 'y', 'color', 'url', 'owner']
         });
+        if (!pixel) {
+            // If the pixel doesn't exist in the database, return default values
+            return res.json({
+                x: xNum,
+                y: yNum,
+                color: '#FFFFFF',
+                url: '',
+                owner: ''
+            });
+        }
+        res.json(pixel);
     }
     catch (error) {
         console.error('Error getting pixel:', error);
@@ -295,23 +310,10 @@ app.get('/api/pixel/:x/:y', async (req, res) => {
 app.get('/api/pixels/owner/:address', async (req, res) => {
     try {
         const { address } = req.params;
-        const pixels = [];
-        // Instead of using a pipeline which has typing issues, let's use individual queries
-        for (let x = 0; x < WIDTH; x++) {
-            for (let y = 0; y < HEIGHT; y++) {
-                const key = `pixel:${x}:${y}`;
-                const rawPixel = await redisClient.hGetAll(key);
-                if (rawPixel && rawPixel.owner === address) {
-                    pixels.push({
-                        x,
-                        y,
-                        color: rawPixel.color || '#FFFFFF',
-                        url: rawPixel.url || '',
-                        owner: rawPixel.owner
-                    });
-                }
-            }
-        }
+        const pixels = await models_1.Pixel.findAll({
+            where: { owner: address },
+            attributes: ['x', 'y', 'color', 'url', 'owner']
+        });
         res.json({ pixels });
     }
     catch (error) {
@@ -322,13 +324,22 @@ app.get('/api/pixels/owner/:address', async (req, res) => {
 // Start the server
 async function startServer() {
     try {
-        await connectRedis();
-        await initializeGrid();
-        // Try to get the last processed version from Redis
-        const lastVersionStr = await redisClient.get('lastProcessedVersion');
-        const lastVersion = lastVersionStr ? BigInt(lastVersionStr) : BigInt(0);
-        // Start listening for events
-        startEventListener(lastVersion);
+        // Initialize database
+        await initializeDatabase();
+        // Try to get the last processed version from database
+        try {
+            await models_1.sequelize.query('CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY, value TEXT)');
+            const [rows] = await models_1.sequelize.query('SELECT value FROM app_state WHERE key = \'lastProcessedVersion\'');
+            // @ts-ignore
+            const lastVersionStr = rows.length > 0 ? rows[0].value : '0';
+            const lastVersion = BigInt(lastVersionStr);
+            // Start listening for events
+            startEventListener(lastVersion);
+        }
+        catch (error) {
+            console.error('Error retrieving last processed version:', error);
+            startEventListener(BigInt(0));
+        }
         // Optionally backfill historical data (uncomment if needed on first run)
         // await backfillHistoricalData();
         app.listen(port, () => {

@@ -1,10 +1,11 @@
 import express, { Request, Response } from 'express';
-import { createClient } from 'redis';
 import bodyParser from 'body-parser';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { Pixel, PixelCoordinates, PixelBoughtEvent, PixelUpdatedEvent, RedisPixel } from './types';
-import { AptosClient, Types } from 'aptos';
+import { Pixel, sequelize } from './models';
+import { PixelCoordinates, PixelBoughtEvent, PixelUpdatedEvent } from './types';
+import { AptosClient } from 'aptos';
+import { Op } from 'sequelize';
 
 dotenv.config();
 
@@ -21,54 +22,6 @@ const CONTRACT_ADDRESS = process.env.APTOS_CONTRACT_ADDRESS || '0x1';
 const MODULE_NAME = 'PixelBoard';
 const WIDTH = 1000;
 const HEIGHT = 1000;
-
-// Redis client setup
-const redisClient = createClient({
-  url: process.env.REDIS_URL || 'redis://redis:6379'
-});
-
-// Redis error handling
-redisClient.on('error', (err) => {
-  console.error('Redis Client Error', err);
-});
-
-// Connect to Redis
-async function connectRedis(): Promise<void> {
-  await redisClient.connect();
-  console.log('Connected to Redis');
-}
-
-// Initialize the grid with default values if it doesn't exist
-async function initializeGrid(): Promise<void> {
-  const exists = await redisClient.exists('pixelGrid');
-  
-  if (!exists) {
-    console.log('Initializing pixel grid...');
-    
-    // Create a pipeline for faster bulk operations
-    const pipeline = redisClient.multi();
-    
-    // Default pixel values
-    const defaultPixel: RedisPixel = {
-      color: '#FFFFFF',
-      url: '',
-      owner: ''
-    };
-    
-    // Set each pixel in the grid to the default value
-    for (let x = 0; x < WIDTH; x++) {
-      for (let y = 0; y < HEIGHT; y++) {
-        const key = `pixel:${x}:${y}`;
-        pipeline.hSet(key, 'color', defaultPixel.color);
-        pipeline.hSet(key, 'url', defaultPixel.url);
-        pipeline.hSet(key, 'owner', defaultPixel.owner);
-      }
-    }
-    
-    await pipeline.exec();
-    console.log('Pixel grid initialized with default values');
-  }
-}
 
 // Utility function to convert from 1D contract coordinate to 2D grid coordinates
 function convertToXY(id: number): PixelCoordinates {
@@ -108,6 +61,53 @@ function decodeLink(bytes: string): string {
   }
 }
 
+// Initialize the database and create tables
+async function initializeDatabase(): Promise<void> {
+  try {
+    // Test database connection
+    await sequelize.authenticate();
+    console.log('Connected to PostgreSQL database');
+    
+    // Sync all models (create tables if they don't exist)
+    await sequelize.sync();
+    console.log('Database synchronized');
+    
+    // Check if we need to initialize the grid with default values
+    const pixelCount = await Pixel.count();
+    
+    if (pixelCount === 0) {
+      console.log('Initializing pixel grid with default values...');
+      
+      // Create default pixels in batches to avoid memory issues
+      const batchSize = 1000;
+      for (let x = 0; x < WIDTH; x++) {
+        const pixelsToCreate = [];
+        
+        for (let y = 0; y < HEIGHT; y++) {
+          pixelsToCreate.push({
+            x,
+            y,
+            color: '#FFFFFF',
+            url: '',
+            owner: ''
+          });
+          
+          // Insert in batches
+          if (pixelsToCreate.length >= batchSize || y === HEIGHT - 1) {
+            await Pixel.bulkCreate(pixelsToCreate);
+            pixelsToCreate.length = 0;
+          }
+        }
+      }
+      
+      console.log('Pixel grid initialized with default values');
+    }
+  } catch (error) {
+    console.error('Database initialization error:', error);
+    throw error;
+  }
+}
+
 // Function to handle pixel bought events
 async function handlePixelBought(event: PixelBoughtEvent): Promise<void> {
   try {
@@ -118,13 +118,24 @@ async function handlePixelBought(event: PixelBoughtEvent): Promise<void> {
     const hexColor = argbToHex(argb);
     const url = decodeLink(link);
     
-    const key = `pixel:${x}:${y}`;
-    
-    await redisClient.hSet(key, {
-      color: hexColor,
-      url: url,
-      owner: owner
+    // Find the pixel or create it if it doesn't exist
+    const [pixel, created] = await Pixel.findOrCreate({
+      where: { x, y },
+      defaults: {
+        color: hexColor,
+        url: url,
+        owner: owner
+      }
     });
+    
+    // If pixel already exists, update it
+    if (!created) {
+      await pixel.update({
+        color: hexColor,
+        url: url,
+        owner: owner
+      });
+    }
     
     console.log(`Pixel bought at (${x}, ${y}) by ${owner}`);
   } catch (error) {
@@ -142,15 +153,23 @@ async function handlePixelUpdated(event: PixelUpdatedEvent): Promise<void> {
     const hexColor = argbToHex(argb);
     const url = decodeLink(link);
     
-    const key = `pixel:${x}:${y}`;
+    // Update the pixel
+    const [updatedRowsCount] = await Pixel.update(
+      {
+        color: hexColor,
+        url: url,
+        owner: owner
+      },
+      {
+        where: { x, y }
+      }
+    );
     
-    await redisClient.hSet(key, {
-      color: hexColor,
-      url: url,
-      owner: owner
-    });
-    
-    console.log(`Pixel updated at (${x}, ${y}) by ${owner}`);
+    if (updatedRowsCount > 0) {
+      console.log(`Pixel updated at (${x}, ${y}) by ${owner}`);
+    } else {
+      console.log(`Pixel not found for update at (${x}, ${y})`);
+    }
   } catch (error) {
     console.error('Error handling pixel updated event:', error);
   }
@@ -204,8 +223,13 @@ async function startEventListener(startVersion: bigint = BigInt(0)): Promise<voi
           console.log(`Processed ${buyEvents.length} buy events and ${updateEvents.length} update events`);
         }
         
-        // Store the current version in Redis for restart recovery
-        await redisClient.set('lastProcessedVersion', currentVersion.toString());
+        // Store the current version in database
+        await sequelize.query('CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY, value TEXT)');
+        await sequelize.query('INSERT INTO app_state (key, value) VALUES (\'lastProcessedVersion\', :value) ON CONFLICT (key) DO UPDATE SET value = :value', 
+          { 
+            replacements: { value: currentVersion.toString() },
+            type: 'RAW'
+          });
       } catch (error) {
         console.error('Error polling events:', error);
       }
@@ -266,13 +290,13 @@ async function backfillHistoricalData(): Promise<void> {
 // Health check endpoint
 app.get('/health', async (req: Request, res: Response) => {
   try {
-    // Check Redis connection
-    const pong = await redisClient.ping();
+    // Check database connection
+    await sequelize.authenticate();
     
     res.json({
       status: 'ok',
       timestamp: new Date().toISOString(),
-      redis: pong === 'PONG' ? 'connected' : 'error',
+      database: 'connected',
       version: process.env.npm_package_version || '1.0.0'
     });
   } catch (error) {
@@ -280,7 +304,7 @@ app.get('/health', async (req: Request, res: Response) => {
     res.status(500).json({
       status: 'error',
       timestamp: new Date().toISOString(),
-      redis: 'error'
+      database: 'error'
     });
   }
 });
@@ -288,34 +312,22 @@ app.get('/health', async (req: Request, res: Response) => {
 // Get the entire grid
 app.get('/api/grid', async (req: Request, res: Response) => {
   try {
-    const grid: Pixel[][] = [];
+    // Rather than getting the entire grid at once, we can paginate
+    // or limit the response size for better performance
+    const pixels = await Pixel.findAll({
+      attributes: ['x', 'y', 'color', 'url', 'owner'],
+      where: {
+        // Only return non-default pixels to reduce response size
+        [Op.or]: [
+          { color: { [Op.ne]: '#FFFFFF' } },
+          { url: { [Op.ne]: '' } },
+          { owner: { [Op.ne]: '' } }
+        ]
+      },
+      limit: 10000 // Adjust the limit as needed
+    });
     
-    // Get all pixels and their data
-    for (let x = 0; x < WIDTH; x++) {
-      const row: Pixel[] = [];
-      for (let y = 0; y < HEIGHT; y++) {
-        const key = `pixel:${x}:${y}`;
-        const rawPixel = await redisClient.hGetAll(key);
-        
-        // Convert raw Redis data to RedisPixel with defaults
-        const pixel: RedisPixel = {
-          color: rawPixel.color || '#FFFFFF',
-          url: rawPixel.url || '',
-          owner: rawPixel.owner || ''
-        };
-        
-        row.push({
-          x,
-          y,
-          color: pixel.color,
-          url: pixel.url,
-          owner: pixel.owner
-        });
-      }
-      grid.push(row);
-    }
-    
-    res.json({ grid });
+    res.json({ pixels });
   } catch (error) {
     console.error('Error getting grid:', error);
     res.status(500).json({ error: 'Failed to retrieve grid' });
@@ -334,23 +346,23 @@ app.get('/api/pixel/:x/:y', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid coordinates' });
     }
     
-    const key = `pixel:${xNum}:${yNum}`;
-    const rawPixel = await redisClient.hGetAll(key);
-    
-    // Convert raw Redis data to RedisPixel with defaults
-    const pixel: RedisPixel = {
-      color: rawPixel.color || '#FFFFFF',
-      url: rawPixel.url || '',
-      owner: rawPixel.owner || ''
-    };
-    
-    res.json({
-      x: xNum,
-      y: yNum,
-      color: pixel.color,
-      url: pixel.url,
-      owner: pixel.owner
+    const pixel = await Pixel.findOne({
+      where: { x: xNum, y: yNum },
+      attributes: ['x', 'y', 'color', 'url', 'owner']
     });
+    
+    if (!pixel) {
+      // If the pixel doesn't exist in the database, return default values
+      return res.json({
+        x: xNum,
+        y: yNum,
+        color: '#FFFFFF',
+        url: '',
+        owner: ''
+      });
+    }
+    
+    res.json(pixel);
   } catch (error) {
     console.error('Error getting pixel:', error);
     res.status(500).json({ error: 'Failed to retrieve pixel' });
@@ -361,25 +373,11 @@ app.get('/api/pixel/:x/:y', async (req: Request, res: Response) => {
 app.get('/api/pixels/owner/:address', async (req: Request, res: Response) => {
   try {
     const { address } = req.params;
-    const pixels: Pixel[] = [];
     
-    // Instead of using a pipeline which has typing issues, let's use individual queries
-    for (let x = 0; x < WIDTH; x++) {
-      for (let y = 0; y < HEIGHT; y++) {
-        const key = `pixel:${x}:${y}`;
-        const rawPixel = await redisClient.hGetAll(key);
-        
-        if (rawPixel && rawPixel.owner === address) {
-          pixels.push({
-            x,
-            y,
-            color: rawPixel.color || '#FFFFFF',
-            url: rawPixel.url || '',
-            owner: rawPixel.owner
-          });
-        }
-      }
-    }
+    const pixels = await Pixel.findAll({
+      where: { owner: address },
+      attributes: ['x', 'y', 'color', 'url', 'owner']
+    });
     
     res.json({ pixels });
   } catch (error) {
@@ -391,15 +389,24 @@ app.get('/api/pixels/owner/:address', async (req: Request, res: Response) => {
 // Start the server
 async function startServer(): Promise<void> {
   try {
-    await connectRedis();
-    await initializeGrid();
+    // Initialize database
+    await initializeDatabase();
     
-    // Try to get the last processed version from Redis
-    const lastVersionStr = await redisClient.get('lastProcessedVersion');
-    const lastVersion = lastVersionStr ? BigInt(lastVersionStr) : BigInt(0);
-    
-    // Start listening for events
-    startEventListener(lastVersion);
+    // Try to get the last processed version from database
+    try {
+      await sequelize.query('CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY, value TEXT)');
+      const [rows] = await sequelize.query('SELECT value FROM app_state WHERE key = \'lastProcessedVersion\'');
+      
+      // @ts-ignore
+      const lastVersionStr = rows.length > 0 ? rows[0].value : '0';
+      const lastVersion = BigInt(lastVersionStr);
+      
+      // Start listening for events
+      startEventListener(lastVersion);
+    } catch (error) {
+      console.error('Error retrieving last processed version:', error);
+      startEventListener(BigInt(0));
+    }
     
     // Optionally backfill historical data (uncomment if needed on first run)
     // await backfillHistoricalData();
