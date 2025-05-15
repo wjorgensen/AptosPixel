@@ -43,7 +43,7 @@ export default function Home() {
     }
   }, []);
 
-  //Balance
+  //replace with actual aptos balance 
   useEffect(() => {
     const fetchBalance = async () => {
       if (connected && account?.address) {
@@ -88,10 +88,9 @@ export default function Home() {
     return `${address.slice(0, 6)}...${address.slice(-4)}`;
   };
 
-  // Initialize the PixelBoardClient
   useEffect(() => {
     const nodeUrl = process.env.NEXT_PUBLIC_APTOS_NODE_URL || "https://fullnode.testnet.aptoslabs.com";
-    const contractAddress = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '0xpixel_board_admin'; // Replace with your deployed contract address
+    const contractAddress = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '0xpixel_board_admin'; // replace with deployed contract address
     
     const client = new PixelBoardClient(nodeUrl, contractAddress);
     setPixelBoardClient(client);

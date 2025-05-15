@@ -28,16 +28,14 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
   const [selectedPixel, setSelectedPixel] = useState<{x: number, y: number} | null>(null);
   const [pixelData, setPixelData] = useState<Map<number, Pixel>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedColor, setSelectedColor] = useState(0xFF0000FF); // Default red
+  const [selectedColor, setSelectedColor] = useState(0xFF0000FF);
   const { connected, account } = useWallet();
   
-  // Grid settings
-  const gridSize = 20; // Size of each grid cell
+  const gridSize = 20;
   const gridColor = '#2a2a2a';
   const gridHighlightColor = '#3a3a3a';
-  const BOARD_WIDTH = 1000; // Match the contract's board width
+  const BOARD_WIDTH = 1000;
   
-  // Convert screen coordinates to grid coordinates
   const screenToGrid = (screenX: number, screenY: number) => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return { x: -1, y: -1 };
@@ -45,11 +43,9 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
     const canvasX = screenX - rect.left;
     const canvasY = screenY - rect.top;
     
-    // Adjust for pan position and scale
     const gridX = Math.floor((canvasX - position.x) / (gridSize * scale));
     const gridY = Math.floor((canvasY - position.y) / (gridSize * scale));
     
-    // Ensure coordinates are within bounds
     if (gridX < 0 || gridX >= BOARD_WIDTH || gridY < 0 || gridY >= BOARD_WIDTH) {
       return { x: -1, y: -1 };
     }
@@ -57,7 +53,6 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
     return { x: gridX, y: gridY };
   };
   
-  // Fetch pixel data from blockchain
   const fetchPixelData = async (x: number, y: number) => {
     if (!pixelBoardClient) return null;
     
@@ -65,7 +60,6 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
       const index = pixelBoardClient.xyToIndex(x, y);
       const pixel = await pixelBoardClient.viewPixel(index);
       
-      // Update the pixel data map
       setPixelData(prevData => {
         const newData = new Map(prevData);
         newData.set(index, pixel);
@@ -79,26 +73,22 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
     }
   };
   
-  // Fetch visible pixels
   const fetchVisiblePixels = async () => {
     if (!pixelBoardClient || isLoading) return;
     
     setIsLoading(true);
     
     try {
-      // Calculate visible grid area
       const startX = Math.max(0, Math.floor(-position.x / (gridSize * scale)));
       const startY = Math.max(0, Math.floor(-position.y / (gridSize * scale)));
       const endX = Math.min(BOARD_WIDTH - 1, Math.ceil((width - position.x) / (gridSize * scale)));
       const endY = Math.min(BOARD_WIDTH - 1, Math.ceil((height - position.y) / (gridSize * scale)));
       
-      // Limit to a reasonable number of pixels to fetch at once
       const MAX_PIXELS = 100;
       const pixelsToFetch = [];
       
       for (let y = startY; y <= endY; y++) {
         for (let x = startX; x <= endX; x++) {
-          // Skip if we already have this pixel's data
           const index = pixelBoardClient.xyToIndex(x, y);
           if (!pixelData.has(index)) {
             pixelsToFetch.push({ x, y });
@@ -108,7 +98,6 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
         if (pixelsToFetch.length >= MAX_PIXELS) break;
       }
       
-      // Fetch pixels in parallel
       await Promise.all(pixelsToFetch.map(({ x, y }) => fetchPixelData(x, y)));
     } catch (error) {
       console.error("Error fetching visible pixels:", error);
@@ -117,7 +106,6 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
     }
   };
   
-  // Place a pixel on the blockchain
   const placePixel = async (x: number, y: number, argb: number) => {
     if (!pixelBoardClient || !connected || !account) return;
     
@@ -143,18 +131,15 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
         );
       }
       
-      // Refresh the pixel data
       await fetchPixelData(x, y);
     } catch (error) {
       console.error(`Error placing pixel at (${x},${y}):`, error);
     }
   };
   
-  // Draw the infinite grid
   const drawGrid = (ctx: CanvasRenderingContext2D) => {
     ctx.clearRect(0, 0, width, height);
     
-    // Background
     ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(0, 0, width, height);
     
@@ -192,27 +177,24 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
       
       for (let y = startY; y <= endY; y++) {
         for (let x = startX; x <= endX; x++) {
-          try {
-            const index = pixelBoardClient.xyToIndex(x, y);
-            const pixel = pixelData.get(index);
+          const index = pixelBoardClient.xyToIndex(x, y);
+          const pixel = pixelData.get(index);
+          
+          if (pixel) {
+            const pixelX = position.x + x * gridSize * scale;
+            const pixelY = position.y + y * gridSize * scale;
+            const alpha = (pixel.argb >> 24) & 0xFF;
+            const red = (pixel.argb >> 16) & 0xFF;
+            const green = (pixel.argb >> 8) & 0xFF;
+            const blue = pixel.argb & 0xFF;
             
-            if (pixel) {
-              const pixelX = position.x + x * gridSize * scale;
-              const pixelY = position.y + y * gridSize * scale;
-              const alpha = (pixel.argb >> 24) & 0xFF;
-              const red = (pixel.argb >> 16) & 0xFF;
-              const green = (pixel.argb >> 8) & 0xFF;
-              const blue = pixel.argb & 0xFF;
-              
-              ctx.fillStyle = `rgba(${red}, ${green}, ${blue}, ${alpha / 255})`;
-              ctx.fillRect(
-                pixelX, 
-                pixelY, 
-                gridSize * scale, 
-                gridSize * scale
-              );
-            }
-          } catch (error) {
+            ctx.fillStyle = `rgba(${red}, ${green}, ${blue}, ${alpha / 255})`;
+            ctx.fillRect(
+              pixelX, 
+              pixelY, 
+              gridSize * scale, 
+              gridSize * scale
+            );
           }
         }
       }
@@ -263,13 +245,11 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
         y: e.clientY - position.y
       });
     } else if (e.button === 0) {
-      // Left click for selecting a pixel
       const gridCoords = screenToGrid(e.clientX, e.clientY);
       
       if (gridCoords.x >= 0 && gridCoords.y >= 0) {
         setSelectedPixel(gridCoords);
         
-        // Double click to place a pixel
         if (e.detail === 2 && connected) {
           placePixel(gridCoords.x, gridCoords.y, selectedColor);
         }
@@ -289,7 +269,6 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
   const handleMouseUp = () => {
     if (isDragging) {
       setIsDragging(false);
-      // Fetch new pixels after dragging stops
       fetchVisiblePixels();
     }
   };
