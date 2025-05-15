@@ -1,0 +1,48 @@
+.boardContainer {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #121212; /* Dark background */
+  border-radius: 8px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+.canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none; /* Prevents default touch actions like scrolling */
+}
+
+.controls {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  background-color: rgba(30, 30, 30, 0.8); /* Dark semi-transparent background */
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 14px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  user-select: none;
+  color: #e0e0e0; /* Light text for dark background */
+  border: 1px solid #333;
+}
+
+.zoomInfo {
+  margin-bottom: 4px;
+  font-weight: 500;
+  color: #fff;
+}
+
+.coordsInfo {
+  color: #aaa;
+}
+
+/* Add a subtle glow effect to the controls */
+@media (prefers-color-scheme: dark) {
+  .controls {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 4px rgba(255, 255, 255, 0.1);
+  }
+} 
