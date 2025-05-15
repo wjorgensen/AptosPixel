@@ -7,24 +7,31 @@ services:
       - "3005:3005"
     environment:
       - PORT=3005
-      - REDIS_URL=redis://redis:6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=pixels
       - APTOS_CONTRACT_ADDRESS=${APTOS_CONTRACT_ADDRESS:-0x1}
       - APTOS_NETWORK=${APTOS_NETWORK:-mainnet}
       - APTOS_NODE_URL=${APTOS_NODE_URL:-https://fullnode.mainnet.aptoslabs.com/v1}
     depends_on:
-      - redis
+      - postgres
     volumes:
       - ./src:/app/src
     restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
+  postgres:
+    image: postgres:15-alpine
     ports:
-      - "6379:6379"
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=pixels
     volumes:
-      - redis-data:/data
+      - postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
-    command: redis-server --save 60 1 --loglevel warning
 
 volumes:
-  redis-data: 
+  postgres-data: 

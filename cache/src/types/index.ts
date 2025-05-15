@@ -3,18 +3,12 @@ export interface Pixel {
   y: number;
   color: string;
   url: string;
-  owner?: string;
+  owner: string;
 }
 
 export interface PixelUpdatePayload {
   color?: string;
   url?: string;
-}
-
-export interface RedisPixel {
-  color: string;
-  url: string;
-  owner: string;
 }
 
 // Aptos-related types
