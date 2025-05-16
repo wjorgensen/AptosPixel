@@ -155,6 +155,12 @@ export default function Home() {
             
             <main className={styles.main}>
               <h1>AptosPixel Board</h1>
+              
+              <div className={styles.description}>
+                <p>Each pixel costs <span className={styles.highlight}>0.01 APT</span>.</p>
+                <p>Click on any pixel to purchase it. Once you own a pixel, you can change its color anytime.</p>
+                <p>Create art, messages, or stake your claim on the Aptos blockchain!</p>
+              </div>
              
               {extensionConflict && (
                 <div style={{ color: 'red', padding: '15px', margin: '15px 0', border: '1px solid red', borderRadius: '5px' }}>
@@ -182,7 +188,7 @@ export default function Home() {
                     onClick={() => setShowModal(true)} 
                     className={styles.connectButton}
                   >
-                    Connect Wallet to Place Pixels
+                    Connect Wallet to Buy Pixels
                   </button>
                 </div>
               )}

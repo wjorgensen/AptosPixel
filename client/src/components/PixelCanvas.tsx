@@ -29,12 +29,16 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
   const [pixelData, setPixelData] = useState<Map<number, Pixel>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
   const [selectedColor, setSelectedColor] = useState(0xFF0000FF);
+  const [showPurchaseUI, setShowPurchaseUI] = useState(false);
+  const [isPurchasing, setIsPurchasing] = useState(false);
+  const [purchaseError, setPurchaseError] = useState<string | null>(null);
   const { connected, account } = useWallet();
   
   const gridSize = 20;
   const gridColor = '#2a2a2a';
   const gridHighlightColor = '#3a3a3a';
   const BOARD_WIDTH = 1000;
+  const PIXEL_PRICE = 0.01;  
   
   const screenToGrid = (screenX: number, screenY: number) => {
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -106,34 +110,43 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
     }
   };
   
-  const placePixel = async (x: number, y: number, argb: number) => {
-    if (!pixelBoardClient || !connected || !account) return;
+  const buyPixel = async () => {
+    if (!pixelBoardClient || !connected || !account || !selectedPixel) return;
+    
+    setIsPurchasing(true);
+    setPurchaseError(null);
     
     try {
-      const index = pixelBoardClient.xyToIndex(x, y);
+      const index = pixelBoardClient.xyToIndex(selectedPixel.x, selectedPixel.y);
       const pixel = pixelData.get(index);
       
       const link = PixelBoardClient.stringToUint8Array("");
       
       if (pixel && pixel.owner === account.address.toString()) {
+        // If user already owns the pixel, just update it
         await pixelBoardClient.updatePixels(
           account,
           [index],
-          [argb],
+          [selectedColor],
           [link]
         );
       } else {
+        // Otherwise buy the pixel
         await pixelBoardClient.buyPixels(
           account,
           [index],
-          [argb],
+          [selectedColor],
           [link]
         );
       }
       
-      await fetchPixelData(x, y);
+      await fetchPixelData(selectedPixel.x, selectedPixel.y);
+      setShowPurchaseUI(false);
     } catch (error) {
-      console.error(`Error placing pixel at (${x},${y}):`, error);
+      console.error(`Error buying pixel at (${selectedPixel.x},${selectedPixel.y}):`, error);
+      setPurchaseError("Failed to purchase pixel. Please try again.");
+    } finally {
+      setIsPurchasing(false);
     }
   };
   
@@ -230,8 +243,8 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
     }
     
     if (isLoading) {
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-      ctx.font = '12px sans-serif';
+      ctx.fillStyle = 'rgba(0, 255, 0, 0.7)';
+      ctx.font = '14px "Courier New", monospace';
       ctx.fillText('Loading...', 10, height - 10);
     }
   };
@@ -250,8 +263,20 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
       if (gridCoords.x >= 0 && gridCoords.y >= 0) {
         setSelectedPixel(gridCoords);
         
-        if (e.detail === 2 && connected) {
-          placePixel(gridCoords.x, gridCoords.y, selectedColor);
+        if (connected) {
+          const index = pixelBoardClient?.xyToIndex(gridCoords.x, gridCoords.y) || 0;
+          const pixel = pixelData.get(index);
+          
+          // Check if user owns the pixel
+          if (pixel && pixel.owner === account?.address.toString()) {
+            // If double-click and user owns the pixel, update it directly
+            if (e.detail === 2) {
+              buyPixel();
+            }
+          } else {
+            // If user doesn't own the pixel, show purchase UI
+            setShowPurchaseUI(true);
+          }
         }
       }
     }
@@ -335,6 +360,7 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
         onWheel={handleWheel}
         onContextMenu={handleContextMenu}
       />
+      
       {connected && (
         <div className={styles.colorSelector}>
           <div className={styles.colorPreview} style={{
@@ -361,6 +387,53 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
                 onClick={() => setSelectedColor(color)}
               />
             ))}
+          </div>
+          <div className={styles.instructions}>
+            <p>Right-click + drag to move</p>
+            <p>Scroll to zoom</p>
+            <p>Click to select a pixel</p>
+          </div>
+        </div>
+      )}
+      
+      {showPurchaseUI && connected && selectedPixel && (
+        <div className={styles.purchaseOverlay}>
+          <div className={styles.purchaseModal}>
+            <h3>Buy Pixel</h3>
+            <p>Position: ({selectedPixel.x}, {selectedPixel.y})</p>
+            <div className={styles.pixelPreview} style={{
+              backgroundColor: `rgba(
+                ${(selectedColor >> 16) & 0xFF},
+                ${(selectedColor >> 8) & 0xFF},
+                ${selectedColor & 0xFF},
+                ${((selectedColor >> 24) & 0xFF) / 255}
+              )`
+            }}></div>
+            <p className={styles.priceTag}>Price: {PIXEL_PRICE} APT</p>
+            
+            {purchaseError && (
+              <div className={styles.errorMessage}>{purchaseError}</div>
+            )}
+            
+            <div className={styles.purchaseActions}>
+              <button 
+                className={styles.cancelButton}
+                onClick={() => {
+                  setShowPurchaseUI(false);
+                  setPurchaseError(null);
+                }}
+                disabled={isPurchasing}
+              >
+                Cancel
+              </button>
+              <button 
+                className={styles.buyButton}
+                onClick={buyPixel}
+                disabled={isPurchasing}
+              >
+                {isPurchasing ? 'Processing...' : 'Buy Now'}
+              </button>
+            </div>
           </div>
         </div>
       )}
