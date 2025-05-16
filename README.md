@@ -2,6 +2,17 @@
 
 AptosPixel is a decentralized pixel art platform built on the Aptos blockchain. Users can purchase, own, and customize individual pixels on one large canvas, creating collaborative artwork that lives on the blockchain.
 
+![AptosPixel Board Screenshot](UI/7.png)
+![AptosPixel Board Screenshot](UI/1.png)
+![AptosPixel Board Screenshot](UI/2.png)
+![AptosPixel Board Screenshot](UI/3.png)
+![AptosPixel Board Screenshot](UI/4.png)
+![AptosPixel Board Screenshot](UI/5.png)
+![AptosPixel Board Screenshot](UI/6.png)
+
+Video Demo: https://www.loom.com/share/3eb900e79e9345f7bb2611b4b7952cca?sid=40424c8b-bdcc-4bd2-948c-9c36eff6570f 
+
+
 ## Features
 
 - **Pixel Ownership**: Purchase pixels for 0.01 APT each
