@@ -157,7 +157,7 @@ export default function Home() {
               <h1>AptosPixel Board</h1>
               
               <div className={styles.description}>
-                <p>Each pixel costs <span className={styles.highlight}>0.01 APT</span>.</p>
+                <p>Each pixel costs <span className={styles.highlight}>0.01 APT</span> <span className={styles.demoTag}>(Free in Demo Mode)</span></p>
                 <p>Click on any pixel to purchase it. Once you own a pixel, you can change its color anytime.</p>
                 <p>Create art, messages, or stake your claim on the Aptos blockchain!</p>
               </div>

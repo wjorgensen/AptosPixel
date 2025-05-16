@@ -624,3 +624,10 @@ a.secondary {
   transform: translateY(-2px);
   box-shadow: 0 4px 8px rgba(0, 255, 0, 0.2);
 }
+
+.demoTag {
+  color: #0f0;
+  font-size: 0.8em;
+  opacity: 0.8;
+  margin-left: 5px;
+}

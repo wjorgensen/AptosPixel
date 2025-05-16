@@ -33,6 +33,12 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
   const [isPurchasing, setIsPurchasing] = useState(false);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
   const { connected, account } = useWallet();
+  const [isDemoMode, setIsDemoMode] = useState(true);
+  const [showColorChangeUI, setShowColorChangeUI] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [selectedPixels, setSelectedPixels] = useState<{x: number, y: number}[]>([]);
+  const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
+  const [totalPrice, setTotalPrice] = useState(0);
   
   const gridSize = 20;
   const gridColor = '#2a2a2a';
@@ -111,42 +117,126 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
   };
   
   const buyPixel = async () => {
-    if (!pixelBoardClient || !connected || !account || !selectedPixel) return;
+    if (!connected || !account || !pixelBoardClient) return;
+    
+    const pixelsToUpdate = isMultiSelectMode ? selectedPixels : (selectedPixel ? [selectedPixel] : []);
+    if (pixelsToUpdate.length === 0) return;
     
     setIsPurchasing(true);
-    setPurchaseError(null);
     
     try {
-      const index = pixelBoardClient.xyToIndex(selectedPixel.x, selectedPixel.y);
-      const pixel = pixelData.get(index);
-      
-      const link = PixelBoardClient.stringToUint8Array("");
-      
-      if (pixel && pixel.owner === account.address.toString()) {
-        // If user already owns the pixel, just update it
+      if (isDemoMode) {
+        // Demo mode: Skip blockchain transaction and update UI directly
+        await new Promise(resolve => setTimeout(resolve, 500)); // Simulate transaction time
+        
+        // Update local pixel data with the selected color for all selected pixels
+        for (const pixel of pixelsToUpdate) {
+          const index = pixelBoardClient.xyToIndex(pixel.x, pixel.y);
+          const newPixel = {
+            owner: account.address,
+            argb: selectedColor,
+            link: new Uint8Array()
+          };
+          
+          setPixelData(prevData => {
+            const newData = new Map(prevData);
+            newData.set(index, newPixel);
+            return newData;
+          });
+        }
+        
+        // Close purchase UI and redraw
+        setShowPurchaseUI(false);
+        setSelectedPixel(null);
+        setSelectedPixels([]);
+        setIsMultiSelectMode(false);
+        drawCanvas();
+      } else {
+        // Real blockchain transaction code
+        const indexes = pixelsToUpdate.map(p => pixelBoardClient.xyToIndex(p.x, p.y));
+        const colors = pixelsToUpdate.map(() => selectedColor);
+        const links = pixelsToUpdate.map(() => new Uint8Array());
+        
+        await pixelBoardClient.buyPixels(account, indexes, colors, links);
+        
+        // Refresh pixel data
+        await Promise.all(pixelsToUpdate.map(p => fetchPixelData(p.x, p.y)));
+        setShowPurchaseUI(false);
+        setSelectedPixel(null);
+        setSelectedPixels([]);
+        setIsMultiSelectMode(false);
+      }
+    } catch (error) {
+      console.error("Error buying pixels:", error);
+    } finally {
+      setIsPurchasing(false);
+    }
+  };
+  
+  const updatePixelColor = async () => {
+    if (!connected || !account || !selectedPixel || !pixelBoardClient) return;
+    
+    setIsUpdating(true);
+    
+    try {
+      if (isDemoMode) {
+        // Demo mode: Skip blockchain transaction and update UI directly
+        await new Promise(resolve => setTimeout(resolve, 500)); // Simulate transaction time
+        
+        // Update local pixel data with the new color
+        const index = pixelBoardClient.xyToIndex(selectedPixel.x, selectedPixel.y);
+        const existingPixel = pixelData.get(index);
+        
+        if (existingPixel) {
+          const updatedPixel = {
+            ...existingPixel,
+            argb: selectedColor
+          };
+          
+          setPixelData(prevData => {
+            const newData = new Map(prevData);
+            newData.set(index, updatedPixel);
+            return newData;
+          });
+        }
+        
+        // Close color change UI and redraw
+        setShowColorChangeUI(false);
+        setSelectedPixel(null);
+        drawCanvas();
+      } else {
+        // Real blockchain transaction
+        const index = pixelBoardClient.xyToIndex(selectedPixel.x, selectedPixel.y);
         await pixelBoardClient.updatePixels(
           account,
           [index],
           [selectedColor],
-          [link]
+          [new Uint8Array()]
         );
-      } else {
-        // Otherwise buy the pixel
-        await pixelBoardClient.buyPixels(
-          account,
-          [index],
-          [selectedColor],
-          [link]
-        );
+        
+        // Refresh pixel data
+        await fetchPixelData(selectedPixel.x, selectedPixel.y);
+        setShowColorChangeUI(false);
+        setSelectedPixel(null);
       }
-      
-      await fetchPixelData(selectedPixel.x, selectedPixel.y);
-      setShowPurchaseUI(false);
     } catch (error) {
-      console.error(`Error buying pixel at (${selectedPixel.x},${selectedPixel.y}):`, error);
-      setPurchaseError("Failed to purchase pixel. Please try again.");
+      console.error("Error updating pixel color:", error);
     } finally {
-      setIsPurchasing(false);
+      setIsUpdating(false);
+    }
+  };
+  
+  const toggleMultiSelectMode = () => {
+    if (isMultiSelectMode) {
+      // Exit multi-select mode
+      setIsMultiSelectMode(false);
+      setSelectedPixels([]);
+    } else {
+      // Enter multi-select mode
+      setIsMultiSelectMode(true);
+      setSelectedPixel(null);
+      setShowPurchaseUI(false);
+      setShowColorChangeUI(false);
     }
   };
   
@@ -242,6 +332,24 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
       }
     }
     
+    // Draw selection highlights for multi-select mode
+    if (isMultiSelectMode && selectedPixels.length > 0) {
+      ctx.strokeStyle = '#00ff00';
+      ctx.lineWidth = 2;
+      
+      for (const pixel of selectedPixels) {
+        const pixelX = position.x + pixel.x * gridSize * scale;
+        const pixelY = position.y + pixel.y * gridSize * scale;
+        
+        ctx.strokeRect(
+          pixelX + 1, 
+          pixelY + 1, 
+          gridSize * scale - 2, 
+          gridSize * scale - 2
+        );
+      }
+    }
+    
     if (isLoading) {
       ctx.fillStyle = 'rgba(0, 255, 0, 0.7)';
       ctx.font = '14px "Courier New", monospace';
@@ -261,21 +369,44 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
       const gridCoords = screenToGrid(e.clientX, e.clientY);
       
       if (gridCoords.x >= 0 && gridCoords.y >= 0) {
-        setSelectedPixel(gridCoords);
-        
-        if (connected) {
+        if (isMultiSelectMode && connected) {
+          // In multi-select mode, add to selection
           const index = pixelBoardClient?.xyToIndex(gridCoords.x, gridCoords.y) || 0;
           const pixel = pixelData.get(index);
           
-          // Check if user owns the pixel
-          if (pixel && pixel.owner === account?.address.toString()) {
-            // If double-click and user owns the pixel, update it directly
-            if (e.detail === 2) {
-              buyPixel();
+          // Only allow selecting unowned pixels in multi-select mode
+          if (!pixel || (pixel && account && pixel.owner !== account.address.toString())) {
+            // Check if this pixel is already selected
+            const alreadySelected = selectedPixels.some(p => p.x === gridCoords.x && p.y === gridCoords.y);
+            
+            if (alreadySelected) {
+              // Remove from selection if already selected
+              setSelectedPixels(prev => prev.filter(p => !(p.x === gridCoords.x && p.y === gridCoords.y)));
+            } else {
+              // Add to selection
+              setSelectedPixels(prev => [...prev, gridCoords]);
             }
-          } else {
-            // If user doesn't own the pixel, show purchase UI
-            setShowPurchaseUI(true);
+            
+            // Update total price
+            setTotalPrice((isMultiSelectMode ? selectedPixels.length : 1) * PIXEL_PRICE);
+          }
+        } else {
+          // Single select mode
+          setSelectedPixel(gridCoords);
+          
+          if (connected && account) {
+            const index = pixelBoardClient?.xyToIndex(gridCoords.x, gridCoords.y) || 0;
+            const pixel = pixelData.get(index);
+            
+            // Check if user owns the pixel
+            if (pixel && pixel.owner === account.address.toString()) {
+              // Show color change UI instead of purchase UI
+              setShowColorChangeUI(true);
+            } else {
+              // If user doesn't own the pixel, show purchase UI
+              setShowPurchaseUI(true);
+              setTotalPrice(PIXEL_PRICE);
+            }
           }
         }
       }
@@ -388,6 +519,28 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
               />
             ))}
           </div>
+          <div className={styles.multiSelectToggle}>
+            <button 
+              className={`${styles.multiSelectButton} ${isMultiSelectMode ? styles.active : ''}`}
+              onClick={toggleMultiSelectMode}
+            >
+              {isMultiSelectMode ? 'Exit Multi-Select' : 'Multi-Select'}
+            </button>
+            {isMultiSelectMode && selectedPixels.length > 0 && (
+              <div className={styles.selectionInfo}>
+                <span>{selectedPixels.length} pixels selected</span>
+                <span className={styles.totalPrice}>
+                  Total: {(selectedPixels.length * PIXEL_PRICE).toFixed(2)} APT
+                </span>
+                <button 
+                  className={styles.buySelectedButton}
+                  onClick={() => setShowPurchaseUI(true)}
+                >
+                  Buy Selected
+                </button>
+              </div>
+            )}
+          </div>
           <div className={styles.instructions}>
             <p>Right-click + drag to move</p>
             <p>Scroll to zoom</p>
@@ -396,10 +549,96 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
         </div>
       )}
       
-      {showPurchaseUI && connected && selectedPixel && (
+      {showPurchaseUI && connected && (
         <div className={styles.purchaseOverlay}>
           <div className={styles.purchaseModal}>
-            <h3>Buy Pixel</h3>
+            <h3>{isMultiSelectMode ? 'Buy Multiple Pixels' : 'Buy Pixel'}</h3>
+            
+            {isMultiSelectMode ? (
+              <div className={styles.multiplePixelsInfo}>
+                <p>{selectedPixels.length} pixels selected</p>
+                <div className={styles.pixelGrid}>
+                  {/* Show a small grid of the selected pixels */}
+                  {selectedPixels.slice(0, 9).map((pixel, index) => (
+                    <div 
+                      key={index} 
+                      className={styles.miniPixel}
+                      style={{ backgroundColor: `rgba(
+                        ${(selectedColor >> 16) & 0xFF},
+                        ${(selectedColor >> 8) & 0xFF},
+                        ${selectedColor & 0xFF},
+                        ${((selectedColor >> 24) & 0xFF) / 255}
+                      )` }}
+                    />
+                  ))}
+                  {selectedPixels.length > 9 && (
+                    <div className={styles.morePixels}>+{selectedPixels.length - 9} more</div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              selectedPixel && (
+                <>
+                  <p>Position: ({selectedPixel.x}, {selectedPixel.y})</p>
+                  <div className={styles.pixelPreview} style={{
+                    backgroundColor: `rgba(
+                      ${(selectedColor >> 16) & 0xFF},
+                      ${(selectedColor >> 8) & 0xFF},
+                      ${selectedColor & 0xFF},
+                      ${((selectedColor >> 24) & 0xFF) / 255}
+                    )`
+                  }}></div>
+                </>
+              )
+            )}
+            
+            <p className={styles.priceTag}>
+              {isDemoMode ? 'Demo Mode: Free' : `Price: ${totalPrice.toFixed(2)} APT`}
+            </p>
+            
+            <div className={styles.purchaseActions}>
+              <button 
+                className={styles.cancelButton}
+                onClick={() => {
+                  setShowPurchaseUI(false);
+                  if (isMultiSelectMode) {
+                    // Don't clear selection when canceling in multi-select mode
+                  } else {
+                    setSelectedPixel(null);
+                  }
+                }}
+                disabled={isPurchasing}
+              >
+                Cancel
+              </button>
+              <button 
+                className={styles.buyButton}
+                onClick={buyPixel}
+                disabled={isPurchasing || (isMultiSelectMode && selectedPixels.length === 0)}
+              >
+                {isPurchasing ? 'Processing...' : 'Buy Pixel'}
+              </button>
+            </div>
+            
+            {/* Demo mode toggle */}
+            <div className={styles.demoToggle}>
+              <label>
+                <input 
+                  type="checkbox" 
+                  checked={isDemoMode} 
+                  onChange={() => setIsDemoMode(!isDemoMode)}
+                />
+                Demo Mode (Free)
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {showColorChangeUI && connected && selectedPixel && (
+        <div className={styles.purchaseOverlay}>
+          <div className={styles.purchaseModal}>
+            <h3>Change Pixel Color</h3>
             <p>Position: ({selectedPixel.x}, {selectedPixel.y})</p>
             <div className={styles.pixelPreview} style={{
               backgroundColor: `rgba(
@@ -409,29 +648,44 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
                 ${((selectedColor >> 24) & 0xFF) / 255}
               )`
             }}></div>
-            <p className={styles.priceTag}>Price: {PIXEL_PRICE} APT</p>
             
-            {purchaseError && (
-              <div className={styles.errorMessage}>{purchaseError}</div>
-            )}
+            <div className={styles.colorPickerContainer}>
+              <p>Select a new color:</p>
+              <div className={styles.colorButtons}>
+                {[0xFF0000FF, 0xFF00FF00, 0xFF0000FF, 0xFFFFFF00, 0xFFFF00FF, 0xFF00FFFF, 0xFFFFFFFF, 0xFF000000].map(color => (
+                  <button
+                    key={color}
+                    className={`${styles.colorButton} ${selectedColor === color ? styles.selected : ''}`}
+                    style={{
+                      backgroundColor: `rgba(
+                        ${(color >> 16) & 0xFF},
+                        ${(color >> 8) & 0xFF},
+                        ${color & 0xFF},
+                        ${((color >> 24) & 0xFF) / 255}
+                      )`
+                    }}
+                    onClick={() => setSelectedColor(color)}
+                  />
+                ))}
+              </div>
+            </div>
             
             <div className={styles.purchaseActions}>
               <button 
                 className={styles.cancelButton}
                 onClick={() => {
-                  setShowPurchaseUI(false);
-                  setPurchaseError(null);
+                  setShowColorChangeUI(false);
                 }}
-                disabled={isPurchasing}
+                disabled={isUpdating}
               >
                 Cancel
               </button>
               <button 
                 className={styles.buyButton}
-                onClick={buyPixel}
-                disabled={isPurchasing}
+                onClick={updatePixelColor}
+                disabled={isUpdating}
               >
-                {isPurchasing ? 'Processing...' : 'Buy Now'}
+                {isUpdating ? 'Processing...' : 'Update Color'}
               </button>
             </div>
           </div>
