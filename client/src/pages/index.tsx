@@ -7,6 +7,7 @@ import { AptosClient } from "aptos";
 import PixelCanvas from "@/components/PixelCanvas";
 import { PixelBoardClient } from '@/blockchain/PixelBoardClient';
 import LandingPage from "@/components/LandingPage";
+import FloatingPixelBackground from "@/components/FloatingPixelBackground";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -150,6 +151,8 @@ export default function Home() {
           </div>
 
           <div className={`${styles.page} ${geistSans.variable}`}>
+            <FloatingPixelBackground />
+            
             <main className={styles.main}>
               <h1>AptosPixel Board</h1>
              

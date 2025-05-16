@@ -14,8 +14,9 @@
   padding: 40px 80px 80px;
   gap: 64px;
   font-family: "Courier New", monospace;
-  background-color: #000000;
+  background-color: transparent;
   color: #ffffff;
+  position: relative;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -39,7 +40,9 @@
   margin: 0 auto;
   padding: 20px;
   height: calc(100vh - 80px);
-  background-color: #000000;
+  background-color: transparent;
+  position: relative;
+  z-index: 1;
 }
 
 .main ol {
